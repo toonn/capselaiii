@@ -9,14 +9,21 @@ getTime :: IO Double
 getTime = realToFrac `fmap` getPOSIXTime
 -- No more stolen code from this point on.
 
-data Group = (ag, bg, [String])
+data Distances = MkDist [(String, String, Double)]
+data Group = MkGroup {ag::Integer, bg::Integer, members::[String]} deriving Show
+type Groups = [Group]
 type Solution = [Group]
 
-abc :: Integer n -> Integer m -> Integer limit -> Integer np
-        -> Double pls -> Integer tmax -> Solution bestS
+main :: IO ()
+main = do
+    file = readFile "./mdgplib/Geo/Geo_n010_ds_01.txt"
+    (header:dists) = lines file
+
+abc :: Distances -> Groups -> Integer -> Integer -> Integer 
+        -> Double -> Integer -> Solution 
 -- Initialization phase
-abc n m limit np pls tmax =
-    best_solution_found (abc_ n m limit np pls tstart tmax rng
+abc distances groups m limit np pls tmax =
+    best_solution_found (abc_ distances groups m limit np pls tstart tmax nrng
                                 initial_solutions)
         where
             tstart = getTime
@@ -24,21 +31,21 @@ abc n m limit np pls tmax =
             (nrng, initial_solutions) = init_solutions n m np pls
 
 
-abc_ :: Integer n -> Integer m -> Integer limit -> Integer np
+abc_ :: Integer m -> Integer limit -> Integer np
         -> Double pls -> Integer tstart -> Integer tmax -> StdGen g
         -> [Solution] -> [Solution]
 
 
-init_solutions :: n -> m -> np -> pls -> StdGen rng
-                    -> (nrng, [Solution])
-init_solutions n m np pls rng =
+init_solutions :: Integer -> Integer -> Double -> StdGen
+                    -> (StdGen, [Solution])
+init_solutions m np pls rng =
     (nrng, sol:sols)
     where
-        (trng, sol) = construct_solution n m rng
-        (nrng, sols) = init_solutions n m (np - 1) pls trng
+        (trng, sol) = construct_solution m rng
+        (nrng, sols) = init_solutions m (np - 1) pls trng
 
 
-construct_solution :: Integer n -> Integer m -> StdGen rng
+construct_solution :: Integer m -> StdGen rng
                         -> (nrng, Solution s)
 
 diversity :: String element -> Group g -> Double div
@@ -61,3 +68,4 @@ generate_neigbouring :: Solution s_in -> Solution e
 binary_tournament :: [Solution] -> Solution j
 
 best_solution_found :: [Solution] -> Solution bestS
+
