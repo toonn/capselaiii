@@ -95,17 +95,19 @@ fill distances elems groups rng =
         gfilter gs | smaller ag gs /= [] = smaller ag gs
                    | otherwise = smaller bg gs
         smaller boundFun = filter (\g -> length (members g) < boundFun g)
-        randomGroup gs = (rg, restgs, trng)
-            where
-                (rindex, trng) = randomR (0, (length groups) - 1) rng
-                rg = gs!!rindex
-                restgs = delete rg gs
 
-        (rgroup, restGroups, nrng) = randomGroup $ gfilter groups
+        (rgroup, restGroups, nrng) = randomElem (gfilter groups) trng
 
         nelem = maximumBy (comparing (\elem -> diversity elem rgroup)) elems
         nelems = delete nelem elems
         nrgroup = ginsert rgroup nelem
+
+randomElem :: [a] -> StdGen -> (a, [a], StdGen)
+randomElem gs rng = (rg, restgs, nrng)
+    where
+        (rindex, nrng) = randomR (0, (length groups) - 1) rng
+        rg = gs!!rindex
+        restgs = delete rg gs
 
 
 choose_m :: Map.Map -> [String] -> Groups -> StdGen
@@ -138,7 +140,36 @@ fitness_group (elem:restG) = diversity elem restG + fitness_group restG
 
 local_improvement :: Solution s_in -> Solution s_out
 
-generate_neigbouring :: Solution s_in -> Solution e
+generate_neighbouring :: Map.Map -> Solution -> Integer
+                        -> [(Solution -> Double -> Solution)]
+                        -> StdGen
+                        -> (Solution, StdGen)
+generate_neighbouring distances s_in ndp nos rng = (s_out, nrng)
+    where
+        (rindex, trng) = randomR (0, length nos - 1) rng
+        rno = nos!!rindex
+        (s_out, nrng) = rno distances s_in ndp trng
+
+no1 :: Map.Map -> Solution -> Integer -> StdGen -> (Solution, StdGen)
+no1 distances s_in nd rng = (s_out, nrng)
+    where
+        (rn, trng) = randomR (1, nd) rng
+        (groups, elems, ttrng) = no1_ s_in rn trng
+        ([], s_out, nrng) = fill distances elems groups ttrng
+
+no1_ :: Map.Map -> Groups -> Integer -> StdGen -> (Groups, [String], StdGen)
+no1_ distances elems s_in 0 rng = (s_in, elems, rng)
+no1_ distances elems s_in n rng =
+    no1_ distances (nelem:elems) (nrgroup:restGroups) (n-1) nrng
+    where
+        nemptygroups = filter (\g -> not $ null $ members g) s_in
+        (rgroup, restGroups, trng) = randomElem nemptygroups rng
+        (nelem, restElems, nrng) = randomElem (members rgroup) trng
+        nrgroup = rgroup {members = restElems}
+        
+
+no2 :: Map.Map -> Solution -> Double -> StdGen -> (Solution, StdGen)
+no3 :: Map.Map -> Solution -> Double -> StdGen -> (Solution, StdGen)
 
 binary_tournament :: [Solution] -> Solution j
 
