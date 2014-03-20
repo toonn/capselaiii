@@ -18,9 +18,9 @@ getTime = realToFrac `fmap` getPOSIXTime
 mkset :: Ord a => a -> a -> Set.Set a
 mkset x y = Set.fromList [x, y]
 
-
-data Distances = MkDist [(String, String, Double)]
-data Group = MkGroup {ag::Integer, bg::Integer, members::[String]}
+type Element = String
+type Elements = [Element]
+data Group = MkGroup {ag::Integer, bg::Integer, members::Elements}
     deriving Show
 type Groups = [Group]
 type Solution = [Group]
@@ -57,7 +57,7 @@ map_from_list (pair:pairs) =
         key = mkset elem1 elem2
         value = read diststring :: Double
 
-abc :: Distances -> [String] -> Groups -> Integer -> Integer -> Integer 
+abc :: Distances -> Elements -> Groups -> Integer -> Integer -> Integer 
         -> Double -> Integer -> Solution 
 -- Initialization phase
 abc distances elems groups m limit np pls tmax =
@@ -83,7 +83,7 @@ init_solutions m np pls rng =
         (nrng, sols) = init_solutions m (np - 1) pls trng
 
 
-construct_solution :: Map.Map -> [String] -> Groups -> StdGen
+construct_solution :: Map.Map -> Elements -> Groups -> StdGen
                         -> (StdGen, Solution)
 construct_solution distances elems groups rng =
     (nrng, ngroups)
@@ -92,8 +92,8 @@ construct_solution distances elems groups rng =
             fill distances elems_m groups_m rng_m
         (elems_m, groups_m, rng_m) = choose_m distances elems groups rng
 
-fill :: Map.Map -> [String] -> Groups -> StdGen
-            -> ([String], Groups, StdGen)
+fill :: Map.Map -> Elements -> Groups -> StdGen
+            -> (Elements, Groups, StdGen)
 fill distances [] groups rng = ([], groups, rng)
 fill distances elems groups rng = 
     fill distances nelems (nrgroup:restGroups) nrng
@@ -118,8 +118,8 @@ randomElem gs rng = (rg, restgs, nrng)
         restgs = delete rg gs
 
 
-choose_m :: Map.Map -> [String] -> Groups -> StdGen
-            -> ([String], Groups, StdGen)
+choose_m :: Map.Map -> Elements -> Groups -> StdGen
+            -> (Elements, Groups, StdGen)
 choose_m distances elems [] rng = (elems, [], rng)
 choose_m distances elems (group:groups) rng =
     (nelems, ngroup:ngroups, nrng)
@@ -130,10 +130,10 @@ choose_m distances elems (group:groups) rng =
         ngroup = ginsert group relem
         (nelems, ngroups, nrng) = choose_m distances telems groups trng
 
-ginsert :: Group -> String -> Group
+ginsert :: Group -> Element -> Group
 ginsert group el = group {members = el:(members group)}
 
-diversity :: Map.Map -> String -> Group -> Double
+diversity :: Map.Map -> Element -> Group -> Double
 diversity distances el group =
     sum $ map (\e -> lookup (mkset e el) distances) group
 
@@ -146,13 +146,68 @@ fitness_group distances [el] = 0
 fitness_group distances (el:restG) =
     diversity distances el restG + fitness_group restG
 
-local_improvement :: Solution s_in -> Solution s_out
+local_improvement :: Map.Map -> Solution -> Solution 
+local_improvement distances s_in =
+    li_swap distances s_move s_move (members $ head s_move)
+    where
+        elems = sort $ Set.toList (unions $ keys distances)
+        s_move = li_move distances s_in elems
 
-move :: String -> Group -> Group -> (Group, Group)
+li_move :: Map.Map -> Solution -> Elements -> Solution
+li_move distances s_in [] = s_in
+li_move distances s_in (el:elems)
+    | first_improv_index == Nothing = li_move distances s_in elems
+    | otherwise =
+        local_improvement
+            distances
+            (apply_transform s_in elgroup figroup $ move el elgroup figroup)
+    where
+        elgroup = filter (elem el $ members) s_in
+        fs = map (\g -> (- diversity distances el elgroup)
+                            + diversity distances el (snd $ move el elgroup g))
+                    s_in
+        first_improv_index = findIndex (> 0) fs
+        figroup = (s_in!! $ fromJust first_improv_index)
+
+move :: Element -> Group -> Group -> (Group, Group)
 move el og ng = (og {members = (delete el og)}, ng {members = el:(members ng)})
 
-swap :: String -> String -> Group -> Group -> (Group, Group)
+li_swap :: Map.Map -> Solution -> Groups -> Elements -> Solution
+li_swap distances s_in [g] elems = s_in
+li_swap distances s_in (group:groups) [] =
+    li_swap distances s_in groups (members $ head groups)
+li_swap distances s_in (group:groups) (el:elems)
+    | first_improv_group_index == Nothing =
+        li_swap distances s_in (group:groups) elems
+    | otherwise =
+        li_swap distances s_new s_new (members $ head s_new)
+    where
+        fs = map (\g ->
+                map (\el2 -> let (ngroup, ng) = swap el el2 group g
+                    in  (- diversity distances el group)
+                        - diversity el2 g
+                        + diversity el ng
+                        + diversity el2 ngroup)
+                    (members g))
+                groups
+        first_improv_group_index = findIndex (isJust $ findIndex (> 0)) fs
+        first_improv_group = (fs!! $ fromJust first_improv_group_index)
+        first_improv_index =
+            findIndex (> 0) first_improv_group
+        first_improv_elem = first_improv_group!! $ fromJust first_improv_index
+        s_new = apply_transform
+                    s_in
+                    group
+                    first_improv_group
+                    (swap el first_improv_elem group first_improv_group)
+    
+
+swap :: Element -> Element -> Group -> Group -> (Group, Group)
 swap el1 el2 = uncurry (move el2) $ move el1
+
+apply_transform :: Solution -> Group -> Group -> (Group, Group) -> Solution
+apply_transform s_in g1 g2 (ng1, ng2) =
+    ng1:(ng2:(delete g1 (delete g2 s_in)))
 
 generate_neighbouring :: Map.Map -> Solution -> Integer
                         -> [(Solution -> Double -> Solution)]
@@ -171,8 +226,8 @@ no1 distances s_in nd rng = (s_out, nrng)
         (groups, elems, ttrng) = no1_ distances s_in [] rn trng
         ([], s_out, nrng) = fill distances elems groups ttrng
 
-no1_ :: Map.Map -> Groups -> [String] -> Integer -> StdGen
-            -> (Groups, [String], StdGen)
+no1_ :: Map.Map -> Groups -> Elements -> Integer -> StdGen
+            -> (Groups, Elements, StdGen)
 no1_ distances s_in elems 0 rng = (s_in, elems, rng)
 no1_ distances s_in elems n rng =
     no1_ distances (nelem:elems) (nrgroup:restGroups) (n-1) nrng
@@ -189,14 +244,14 @@ no2 distances s_in nd rng = (s_out, nrng)
         (groups, elems) = no2_ distances s_in [] rn
         ([], s_out, nrng) = fill distances elems groups trng
 
-no2_ :: Map.Map -> Groups -> [String] -> Integer -> (Groups, [String])
+no2_ :: Map.Map -> Groups -> Elements -> Integer -> (Groups, Elements)
 no2_ distances groups elems 0 = (groups, elems)
 no2_ distances groups elems n = no2_ distances tgroups (nelem:elems) (n-1)
     where
         (tgroups, nelem) = least_diverse distances groups
     
 
-least_diverse :: Map.Map -> Groups -> (Groups, String)
+least_diverse :: Map.Map -> Groups -> (Groups, Element)
 least_diverse distances groups = (ngroups, nelem)
     where
         nelem = minimumBy
@@ -212,12 +267,12 @@ least_diverse distances groups = (ngroups, nelem)
                             else g)
                     groups
 
-least_diverse_ :: Map.Map -> Groups -> [String]
+least_diverse_ :: Map.Map -> Groups -> Elements
 least_diverse_ distances [] = []
 least_diverse_ distances (group:groups) =
         (least_diverse__ distances group):(least_diverse_ distances groups)
 
-least_diverse__ :: Map.Map -> Group -> String
+least_diverse__ :: Map.Map -> Group -> Element
 least_diverse__ distances group =
     minimumBy
         (comparing (\el -> diversity
@@ -232,7 +287,7 @@ no3 distances s_in p rng = no3_ s_in rp trng
         (rp, trng) = randomR (1, p) rng
         
 no3_ :: Map.Map -> Groups -> Integer -> StdGen
-            -> (Groups, [String], StdGen)
+            -> (Groups, Elements, StdGen)
 no3_ distances groups 0 rng = (groups, rng)
 no3_ distances groups q rng = no3_ distances ngroups (q-1) nrng
     where
