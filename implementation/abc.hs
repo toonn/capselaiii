@@ -152,7 +152,7 @@ move :: String -> Group -> Group -> (Group, Group)
 move el og ng = (og {members = (delete el og)}, ng {members = el:(members ng)})
 
 swap :: String -> String -> Group -> Group -> (Group, Group)
-
+swap el1 el2 = uncurry (move el2) $ move el1
 
 generate_neighbouring :: Map.Map -> Solution -> Integer
                         -> [(Solution -> Double -> Solution)]
