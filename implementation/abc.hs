@@ -58,29 +58,94 @@ map_from_list (pair:pairs) =
         value = read diststring :: Double
 
 abc :: Distances -> Elements -> Groups -> Integer -> Integer -> Integer 
-        -> Double -> Integer -> Solution 
+        -> Double -> Integer -> IO Solution 
 -- Initialization phase
 abc distances elems groups m limit np pls tmax =
-    best_solution_found (abc_ distances elems groups m limit np pls
+    do
+        tstart <- getTime
+        return $ best_solution_found (abc_ distances elems groups m limit np pls
                             tstart tmax nrng initial_solutions)
         where
-            tstart = getTime
             rng = mkStdGen 123
-            (nrng, initial_solutions) = init_solutions m np pls
+            (nrng, initial_sols) =
+                init_solutions distances elems groups np pls rng
+            initial_solutions)
 
 
-abc_ :: Integer m -> Integer limit -> Integer np
-        -> Double pls -> Integer tstart -> Integer tmax -> StdGen g
-        -> [Solution] -> [Solution]
+abc_ :: Map.Map -> Integer m -> Integer limit -> Integer np
+        -> Double pls -> IO Double tstart -> Double tmax -> StdGen g
+        -> IO [Solution] -> IO [Solution]
+abc_ distances elems groups m limit np pls tstart tmax rng cur_sols =
+    loop $ do lift (scout onlooker employed)
+        t <- lift getTime
+        while (t < tmax + tstart)
 
-
-init_solutions :: Integer -> Integer -> Double -> StdGen
-                    -> (StdGen, [Solution])
-init_solutions m np pls rng =
-    (nrng, sol:sols)
+employed :: Map.Map -> [Solution] -> Integer
+                -> [(Solution -> Double -> Solution)] -> StdGen
+                -> ([Solution], StdGen)
+employed distances cur_sols ndp nos rng =
+    (map (\sol -> let
+                    (neighbour_sol, trng) =
+                        generate_neighbouring distances sol ndp nos rng
+                    (imp_sol, ttrng) =
+                        local_improvement distances pls neigbour_sol trng
+                 in
+                    if fitness distances imp_sol > fitness sol
+                    then imp_sol
+                    else sol)
+        cur_sols,
+    refresh rng rn)
     where
-        (trng, sol) = construct_solution m rng
-        (nrng, sols) = init_solutions m (np - 1) pls trng
+        (rn, _) = randomR (1, 1000) rng
+
+onlooker :: Map.Map -> [Solution] -> Integer
+                -> [(Solution -> Double -> Solution)] -> StdGen
+                -> ([Solution], StdGen)
+onlooker distances cur_sols ndp nos rng =
+    onlooker_ distances cur_sols ndp nos rng (length cur_sols)
+
+onlooker_ :: Map.Map -> [Solution] -> Integer
+                -> [(Solution -> Double -> Solution)] -> StdGen -> Integer
+                -> ([Solution], StdGen)
+onlooker_ distances cur_sols ndp nos rng 0 = (cur_sols, rng)
+onlooker_ distances cur_sols ndp nos rng count =
+    if fitness distances imp_sol > fitness sol
+    then onlooker_ distances (imp_sol:(delete sol cur_sols))
+                ndp nos ttrng (count-1)
+    else onlooker_ distances cur_sols ndp nos ttrng (count-1)
+    where
+                    (sol, trng) = binary_tournament distances cur_sols rng
+                    (neighbour_sol, ttrng) =
+                        generate_neighbouring distances sol ndp nos trng
+                    (imp_sol, tttrng) =
+                        local_improvement distances pls neighbour_sol ttrng
+
+scout :: Map.Map -> [Solution] -> Elements -> Groups -> Double -> StdGen
+            -> Integer -> [Integer]
+            -> ([Solution], [Integer], StdGen)
+scout distances cur_sols elems groups pls rng limit iterations =
+    (sols ++ nsols, orig_iters ++ niters, nrng)
+    where
+        (sols, orig_iters) = unzip $
+                filter (\(s, iters) -> iters < limit) (zip cur_sols iterations)
+        (nrng, nsols) = init_solutions distances elems groups
+                            (length cur_sols - length sols) pls rng
+        niters = take (length cur_sols - length sols) [0..]
+
+refresh :: StdGen -> Integer -> StdGen
+refresh rng 0 = rng
+refresh rng n = refresh nrng (n-1)
+    where
+        (_, nrng) = random rng :: (Double, StdGen)
+
+
+init_solutions :: Map.Map -> Elements -> Groups -> Integer -> Double -> StdGen
+                    -> (StdGen, [Solution])
+init_solutions distances elems groups np pls rng =
+    (nrng, map (\s -> local_improvement distances pls s nrng) (sol:sols))
+    where
+        (trng, sol) = construct_solution distances elems groups rng
+        (nrng, sols) = init_solutions (np - 1) pls trng
 
 
 construct_solution :: Map.Map -> Elements -> Groups -> StdGen
@@ -146,21 +211,27 @@ fitness_group distances [el] = 0
 fitness_group distances (el:restG) =
     diversity distances el restG + fitness_group restG
 
-local_improvement :: Map.Map -> Solution -> Solution 
-local_improvement distances s_in =
-    li_swap distances s_move s_move (members $ head s_move)
+local_improvement :: Map.Map -> Double -> Solution -> StdGen
+                        -> (Solution, StdGen)
+local_improvement distances pls s_in rng =
+    | u < pls = (li_swap distances s_move s_move (members $ head s_move), nrng)
+    | otherwise = (s_in, rng)
     where
+        (u, trng) = random rng :: (Double, StdGen)
         elems = sort $ Set.toList (unions $ keys distances)
-        s_move = li_move distances s_in elems
+        (s_move, nrng) = li_move distances s_in elems trng
 
-li_move :: Map.Map -> Solution -> Elements -> Solution
-li_move distances s_in [] = s_in
-li_move distances s_in (el:elems)
-    | first_improv_index == Nothing = li_move distances s_in elems
+li_move :: Map.Map -> Double -> Solution -> Elements -> StdGen
+            -> (Solution, StdGen)
+li_move distances pls s_in [] rng = (s_in, rng)
+li_move distances pls s_in (el:elems) rng
+    | first_improv_index == Nothing = (li_move distances s_in elems, rng)
     | otherwise =
         local_improvement
             distances
+            pls
             (apply_transform s_in elgroup figroup $ move el elgroup figroup)
+            rng
     where
         elgroup = filter (elem el $ members) s_in
         fs = map (\g -> (- diversity distances el elgroup)
@@ -313,5 +384,7 @@ binary_tournament distances sols rng = best_solution_found [rsol1, rsol2]
         (rindex2, nrng) = randomR (0, length (delete rsol1 sols) - 1) trng
         rsol2 = (delete rsol1 sols)!!rindex2
 
-best_solution_found :: Map.Map -> [Solution] -> Solution
-best_solution_found distances = maximumBy (comparing (fitness distances))
+best_solution_found :: Map.Map -> [Solution] -> IO Solution
+best_solution_found distances =
+    do
+       return $ maximumBy (comparing (fitness distances))
