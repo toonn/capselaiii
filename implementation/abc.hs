@@ -148,6 +148,12 @@ fitness_group distances (el:restG) =
 
 local_improvement :: Solution s_in -> Solution s_out
 
+move :: String -> Group -> Group -> (Group, Group)
+move el og ng = (og {members = (delete el og)}, ng {members = el:(members ng)})
+
+swap :: String -> String -> Group -> Group -> (Group, Group)
+
+
 generate_neighbouring :: Map.Map -> Solution -> Integer
                         -> [(Solution -> Double -> Solution)]
                         -> StdGen
