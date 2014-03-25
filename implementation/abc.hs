@@ -29,31 +29,65 @@ main :: IO ()
 main = do
     home <- getHomeDirectory
     geo <- getDirectoryContents $ home ++ "/mdgplib/Geo/"
-    let geoN = sort $ filter (isInfixOf "_01.") geo
-    map runOnce geoN
+    let geoN = sort $ filter
+                    (\s -> (isInfixOf "_01." s)
+                    && ((isInfixOf "120" s)
+                            || (isInfixOf "240" s)
+                            || (isInfixOf "480" s)))
+                    geo
+    map runlimitndp geoN
     
+runlimitndp :: Integer -> Double
+        -> [(Distances -> Solution -> Integer -> StdGen -> (Solution, StdGen))]
+        -> Integer -> String
+            -> IO ()
+runlimitndp np pls nos tmax_s filename
+    | isInfixOf "120" filename = do
+        let n = 120 in
+            sols = [(limit, ndp, runOnce limit np ndp pls nos tmax_s filename)
+                | limit <-
+                    [toInteger (0.1*n), toInteger (0.2*n)..toInteger (0.5*n)],
+                  ndp <- [toInteger (0.5*n), n, 2*n]]
+        map (\(limit, ndp, sol) -> print $ show 120 ++ "--" ++ show limit
+                        ++ "--" ++ show ndp ++ ": " ++ fitness distances sol)
+            sols
+    | isInfixOf "240" filename = do
+        let n = 240 in
+            sols = [runOnce limit np ndp pls nos tmax_s filename
+                | limit <-
+                    [toInteger (0.1*n), toInteger (0.2*n)..toInteger (0.5*n)],
+                  ndp <- [toInteger (0.5*n), n, 2*n]]
+        map (\(limit, ndp, sol) -> print $ show 120 ++ "--" ++ show limit
+                        ++ "--" ++ show ndp ++ ": " ++ fitness distances sol)
+            sols
+    | isInfixOf "480" filename = do
+        let n = 480 in
+            sols = [runOnce limit np ndp pls nos tmax_s filename
+                | limit <-
+                    [toInteger (0.1*n), toInteger (0.2*n)..toInteger (0.5*n)],
+                  ndp <- [toInteger (0.5*n), n, 2*n]]
+        map (\(limit, ndp, sol) -> print $ show 120 ++ "--" ++ show limit
+                        ++ "--" ++ show ndp ++ ": " ++ fitness distances sol)
+            sols
 
-runOnce :: String -> IO Solution
-runOnce filename = do
+runOnce :: Integer -> Integer -> Integer -> Double
+        -> [(Distances -> Solution -> Integer -> StdGen -> (Solution, StdGen))]
+        -> Integer -> String
+            -> IO Solution
+runOnce limit np ndp pls nos tmax_s filename = do
     file <- readFile filename
     let (header:dists) = lines file
     let (nstring:(mstring:(grouptypestring:grouplimitstrings))) = words header
+    let n = read nstring :: Integer
     let m = read mstring :: Integer
     let grouplimits = map (\x -> read x :: Integer) grouplimitstrings
     let groups = groups_from_limits grouplimits
     let distances = map_from_list dists
     let elems = nub $ concatMap (\x -> take 2 $ words x) dists
-    let nos = [no1]
-    best_solution <- abc distances elems groups limit np ndp pls nos tmax
+    best_solution <- abc distances elems groups limit np ndp pls nos
+                        (1000000*tmax_s)
     print $ filename ++ ":" ++ (fitness distances $ readIORef best_solution)
     readIORef best_solution
-    where
-        limit = 2*120
-        np = 20
-        pls = 0.1
-        tmax = 1000000*20
-        ndp = 8
-
 
 groups_from_limits :: [Integer] -> Groups
 groups_from_limits [] = []
