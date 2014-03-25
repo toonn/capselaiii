@@ -11,6 +11,7 @@ import qualified Data.Set as Set
 import Data.Maybe
 import Data.IORef
 import System.Timeout
+import Debug.Trace (trace)
 
 -- Stolen from Criterion.Measurement
 --import Data.Time.Clock.POSIX (getPOSIXTime)
@@ -31,24 +32,27 @@ type Solution = [Group]
 
 main :: IO Solution
 main = do
-    file <- readFile "/tmp/mdgplib/Geo/Geo_n010_ds_01.txt"
+    file <- readFile "/home/joren/mdgplib/Geo/Geo_n240_ds_01.txt"
     let (header:dists) = lines file
     let (nstring:(mstring:(grouptypestring:grouplimitstrings))) = words header
     let m = read mstring :: Integer
     let grouplimits = map (\x -> read x :: Integer) grouplimitstrings
     let groups = groups_from_limits grouplimits
     let distances = map_from_list dists
-    let elems = nub $ map (\x -> head $ words x) dists
+    let elems = nub $ concatMap (\x -> take 2 $ words x) dists
     let nos = [no1]
-    print "main"
+    --print "main"
+    --print elems
     best_solution <- abc distances elems groups limit np ndp pls nos tmax
+    printsol <- readIORef best_solution
+    print printsol
     readIORef best_solution
     where
-        limit = np
+        limit = 2*120
         np = 20
-        pls = 0.5
-        tmax = 3000000
-        ndp = 5
+        pls = 0.1
+        tmax = 1000000*20
+        ndp = 8
 
 
 groups_from_limits :: [Integer] -> Groups
@@ -71,12 +75,10 @@ abc :: Distances -> Elements -> Groups -> Integer -> Integer -> Integer -> Doubl
 -- Initialization phase
 abc distances elems groups limit np ndp pls nos tmax =
     do
-        print "abc"
+        --print "abc"
         best_sol <- newIORef (best_solution_found distances initial_sols)
         timeout tmax (seq initial_sols $ abc_ distances elems groups limit ndp pls nos
                         iterations initial_sols nrng best_sol)
-        printsol <- readIORef best_sol
-        print printsol
         return best_sol
         where
             rng = mkStdGen 123
@@ -91,7 +93,7 @@ abc_ :: Distances -> Elements -> Groups -> Integer -> Integer -> Double
             -> IO ()
 abc_ distances elems groups limit ndp pls nos iterations sols rng best_sol =
     do
-        print "abc_"
+        --print "abc_"
         --print sols
         --print $ best_solution_found distances sols
         modifyIORef' best_sol ((best_solution_found distances) . (flip (:) nsols))
@@ -187,7 +189,7 @@ init_solutions distances elems groups np pls rng =
 construct_solution :: Distances -> Elements -> Groups -> StdGen
                         -> (StdGen, Solution)
 construct_solution distances elems groups rng =
-    (nrng, ngroups)
+    {- trace (show "cs: " ++ show elems ++ "\n" ++ show ngroups)-} (nrng, ngroups)
     where
         ([], ngroups, nrng) = if (1 == length groups_m) then error "consol" else
             fill distances elems_m groups_m rng_m
@@ -196,6 +198,7 @@ construct_solution distances elems groups rng =
 -- Wijs elk element in elements toe aan een groep uit groups
 fill :: Distances -> Elements -> Groups -> StdGen
             -> (Elements, Groups, StdGen)
+--fill _ es gs _ | trace (show es ++ "\n" ++ show gs ++ "\n") False = undefined
 fill _ es [g] _ = error $ (show es) ++ (show g)
 fill distances [] groups rng = ([], groups, rng)
 fill distances elems groups rng = 
@@ -207,7 +210,7 @@ fill distances elems groups rng =
                    | otherwise = (smaller bg) gs
         smaller boundFun = filter (\g -> length (members g) < (fromInteger $ boundFun g))
         -- Kies een random element uit de nog niet genoeg gevulde groepen
-        (rgroup, restG, nrng) = if not $ null $ gfilter groups then randomElem (gfilter groups) rng else error $ show groups
+        (rgroup, restG, nrng) = if not $ null $ gfilter groups then randomElem (gfilter groups) rng else error $ show groups ++ show (gfilter groups)
         restGroups = delete rgroup groups
         -- Kies het element dat het meeste diversiteit toevoegt
         nelem = maximumBy
@@ -255,16 +258,24 @@ fitness_group distances (el:rest_el) =
 
 local_improvement :: Distances -> Double -> Solution -> StdGen
                         -> (Solution, StdGen)
+--local_improvement _ _ s_in _ = error $ show s_in
 local_improvement distances pls s_in rng
-    | u < pls = (li_swap distances s_move s_move (members $ head s_move), nrng)
+    | u < pls = (li_swap distances s_move s_move (members $ safehead s_move "locimp"), nrng)
     | otherwise = (s_in, rng)
     where
         (u, trng) = random rng :: (Double, StdGen)
         elems = sort $ Set.toList (Set.unions $ Map.keys distances)
         (s_move, nrng) = li_move distances pls s_in elems trng
 
+safehead :: [a] -> String -> a
+safehead [] s = error $ show s
+safehead (e:el) _ = e
+        
+
 li_move :: Distances -> Double -> Solution -> Elements -> StdGen
             -> (Solution, StdGen)
+--li_move distances pls s_in els rng | 
+--         trace ("lm: " ++ show els ++ "\n" ++ show s_in ++ "\n") False = undefined
 li_move distances pls s_in [] rng = (s_in, rng)
 li_move distances pls s_in (el:elems) rng
     | first_improv_index == Nothing = li_move distances pls s_in elems rng
@@ -275,26 +286,35 @@ li_move distances pls s_in (el:elems) rng
             (apply_transform s_in elgroup figroup $ move el elgroup figroup)
             rng
     where
-        elgroup = head $ filter (elem el . members) s_in
+        -- Groep waar el vandaan komt
+        elgroup = safehead (filter (elem el . members) s_in) (show s_in)
+        -- Lijst van toegevoegde fitnesses per groep als we el daar in zouden steken 
         fs = map (\g -> - (diversity distances el $ members elgroup)
                             + (diversity distances el $ members (snd $ move el elgroup g)))
-                    s_in
-        first_improv_index = findIndex (> 0) fs
+                    (filter 
+                        (\g -> (toInteger . length . members $ g) < (bg g)) 
+                        $ delete elgroup s_in)
+        -- Eerste groep waarvoor we meer fitness krijgen door daarnaar te moven
+        first_improv_index = if (toInteger . length $ members elgroup) <= (ag elgroup)
+                             then Nothing
+                             else findIndex (> 0) fs
         figroup = (s_in!!(fromJust first_improv_index))
 
 move :: Element -> Group -> Group -> (Group, Group)
+-- move el og ng | 
+    -- trace ("move: " ++ show el ++ " " ++ show og ++ " " ++ show ng ++ "\n") False = undefined
 move el og ng =
     (og {members = (delete el $ members og)}, ng {members = el:(members ng)})
 
 li_swap :: Distances -> Solution -> Groups -> Elements -> Solution
 li_swap distances s_in [g] elems = s_in
 li_swap distances s_in (group:groups) [] =
-    li_swap distances s_in groups (members $ head groups)
+    li_swap distances s_in groups (members $ safehead groups "liswap-[]")
 li_swap distances s_in (group:groups) (el:elems)
     | first_improv_group_index == Nothing =
         li_swap distances s_in (group:groups) elems
     | otherwise =
-        li_swap distances s_new s_new (members $ head s_new)
+        li_swap distances s_new s_new (members $ safehead s_new "liswap-other")
     where
         fs = map (\g ->
                 map (\el2 -> let (ngroup, ng) = swap el el2 group g
@@ -318,7 +338,7 @@ li_swap distances s_in (group:groups) (el:elems)
     
 
 swap :: Element -> Element -> Group -> Group -> (Group, Group)
-swap el1 el2 g1 g2 = (uncurry (move el2)) $ move el1 g1 g2
+swap el1 el2 g1 g2 = (uncurry $ flip (move el2)) $ move el1 g1 g2
 
 apply_transform :: Solution -> Group -> Group -> (Group, Group) -> Solution
 apply_transform s_in g1 g2 (ng1, ng2) =
@@ -374,7 +394,7 @@ least_diverse distances groups = (ngroups, nelem)
             (comparing
                 (\el ->
                     let containing_group =
-                            (head (filter ((elem el) . members) groups))
+                            (safehead (filter ((elem el) . members) groups) "leadiv")
                     in
                         diversity
                             distances
