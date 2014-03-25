@@ -4,6 +4,7 @@
 -- January 2013
 
 import System.Random
+import System.Environment
 import Data.Ord
 import Data.List
 import qualified Data.Map as Map
@@ -12,12 +13,6 @@ import Data.Maybe
 import Data.IORef
 import System.Timeout
 import Debug.Trace (trace)
-
--- Stolen from Criterion.Measurement
---import Data.Time.Clock.POSIX (getPOSIXTime)
---getTime :: IO Double
---getTime = realToFrac `fmap` getPOSIXTime
--- No more stolen code from this point on.
 
 mkset :: Ord a => a -> a -> Set.Set a
 mkset x y = Set.fromList [x, y]
@@ -30,9 +25,17 @@ data Group = MkGroup {ag::Integer, bg::Integer, members::Elements}
 type Groups = [Group]
 type Solution = [Group]
 
-main :: IO Solution
+main :: IO ()
 main = do
-    file <- readFile "/home/joren/mdgplib/Geo/Geo_n240_ds_01.txt"
+    home <- getHomeDirectory
+    geo <- getDirectoryContents $ home ++ "/mdgplib/Geo/"
+    let geoN = sort $ filter (isInfixOf "_01.") geo
+    map runOnce geoN
+    
+
+runOnce :: String -> IO Solution
+runOnce filename = do
+    file <- readFile filename
     let (header:dists) = lines file
     let (nstring:(mstring:(grouptypestring:grouplimitstrings))) = words header
     let m = read mstring :: Integer
@@ -41,11 +44,8 @@ main = do
     let distances = map_from_list dists
     let elems = nub $ concatMap (\x -> take 2 $ words x) dists
     let nos = [no1]
-    --print "main"
-    --print elems
     best_solution <- abc distances elems groups limit np ndp pls nos tmax
-    printsol <- readIORef best_solution
-    print printsol
+    print $ filename ++ ":" ++ (fitness distances $ readIORef best_solution)
     readIORef best_solution
     where
         limit = 2*120
