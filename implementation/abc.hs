@@ -280,7 +280,7 @@ li_move distances pls s_in [] rng = (s_in, rng)
 li_move distances pls s_in (el:elems) rng
     | first_improv_index == Nothing = li_move distances pls s_in elems rng
     | otherwise =
-        local_improvement
+        li_move
             distances
             pls
             (apply_transform s_in elgroup figroup $ move el elgroup figroup)
