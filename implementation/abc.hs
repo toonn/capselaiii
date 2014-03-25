@@ -40,14 +40,15 @@ main = do
     let distances = map_from_list dists
     let elems = nub $ map (\x -> head $ words x) dists
     let nos = [no1]
+    print "main"
     best_solution <- abc distances elems groups limit np ndp pls nos tmax
     readIORef best_solution
     where
         limit = np
         np = 20
         pls = 0.5
-        tmax = 10
-        ndp = 10
+        tmax = 3000000
+        ndp = 5
 
 
 groups_from_limits :: [Integer] -> Groups
@@ -70,9 +71,12 @@ abc :: Distances -> Elements -> Groups -> Integer -> Integer -> Integer -> Doubl
 -- Initialization phase
 abc distances elems groups limit np ndp pls nos tmax =
     do
+        print "abc"
         best_sol <- newIORef (best_solution_found distances initial_sols)
-        timeout tmax (abc_ distances elems groups limit ndp pls nos
+        timeout tmax (seq initial_sols $ abc_ distances elems groups limit ndp pls nos
                         iterations initial_sols nrng best_sol)
+        printsol <- readIORef best_sol
+        print printsol
         return best_sol
         where
             rng = mkStdGen 123
@@ -87,7 +91,11 @@ abc_ :: Distances -> Elements -> Groups -> Integer -> Integer -> Double
             -> IO ()
 abc_ distances elems groups limit ndp pls nos iterations sols rng best_sol =
     do
-        modifyIORef best_sol ((best_solution_found distances) . (flip (:) nsols))
+        print "abc_"
+        --print sols
+        --print $ best_solution_found distances sols
+        modifyIORef' best_sol ((best_solution_found distances) . (flip (:) nsols))
+        --print niterations
         abc_ distances elems groups limit ndp pls nos
             (map (+1) niterations) nsols nrng best_sol
         where
@@ -168,6 +176,7 @@ refresh rng n = refresh nrng (n-1)
 
 init_solutions :: Distances -> Elements -> Groups -> Integer -> Double -> StdGen
                     -> (StdGen, [Solution])
+init_solutions distances elems groups 0 _ rng = (rng,[])
 init_solutions distances elems groups np pls rng =
     (nrng, map (\s -> fst $ local_improvement distances pls s nrng) (sol:sols))
     where
@@ -180,29 +189,36 @@ construct_solution :: Distances -> Elements -> Groups -> StdGen
 construct_solution distances elems groups rng =
     (nrng, ngroups)
     where
-        ([], ngroups, nrng) =
+        ([], ngroups, nrng) = if (1 == length groups_m) then error "consol" else
             fill distances elems_m groups_m rng_m
         (elems_m, groups_m, rng_m) = choose_m distances elems groups rng
 
+-- Wijs elk element in elements toe aan een groep uit groups
 fill :: Distances -> Elements -> Groups -> StdGen
             -> (Elements, Groups, StdGen)
+fill _ es [g] _ = error $ (show es) ++ (show g)
 fill distances [] groups rng = ([], groups, rng)
 fill distances elems groups rng = 
     fill distances nelems (nrgroup:restGroups) nrng
     where
+        -- Als alle groepen in gs nog niet tot aan ag gevuld zijn vul tot ag
+        -- anders vul tot bg
         gfilter gs | (smaller ag) gs /= [] = (smaller ag) gs
                    | otherwise = (smaller bg) gs
         smaller boundFun = filter (\g -> length (members g) < (fromInteger $ boundFun g))
-
-        (rgroup, restGroups, nrng) = randomElem (gfilter groups) rng
-
+        -- Kies een random element uit de nog niet genoeg gevulde groepen
+        (rgroup, restG, nrng) = if not $ null $ gfilter groups then randomElem (gfilter groups) rng else error $ show groups
+        restGroups = delete rgroup groups
+        -- Kies het element dat het meeste diversiteit toevoegt
         nelem = maximumBy
-                    (comparing (\el -> diversity distances el rgroup))
+                    (comparing (\el -> diversity distances el $ members rgroup))
                     elems
         nelems = delete nelem elems
         nrgroup = ginsert rgroup nelem
 
 randomElem :: Eq a => [a] -> StdGen -> (a, [a], StdGen)
+randomElem [] _ = error "randomElem"
+randomElem [g] rng = (g, [], rng)
 randomElem gs rng = (rg, restgs, nrng)
     where
         (rindex, nrng) = randomR (0, (length gs) - 1) rng
@@ -216,28 +232,26 @@ choose_m distances elems [] rng = (elems, [], rng)
 choose_m distances elems (group:groups) rng =
     (nelems, ngroup:ngroups, nrng)
     where
-        (rindex, trng) = randomR (0, (length elems) - 1) rng
-        relem = elems!!rindex
-        telems = delete relem elems
+        (relem, telems, trng) = randomElem elems rng
         ngroup = ginsert group relem
         (nelems, ngroups, nrng) = choose_m distances telems groups trng
 
 ginsert :: Group -> Element -> Group
 ginsert group el = group {members = el:(members group)}
 
-diversity :: Distances -> Element -> Group -> Double
-diversity distances el group =
-    sum $ map (\e -> fromJust $ Map.lookup (mkset e el) distances) $ members group
+diversity :: Distances -> Element -> Elements -> Double
+diversity distances el group = sum $ map (fromJust . lu) group
+    where
+        lu e | e == el = Just 0
+             | otherwise = Map.lookup (mkset el e) distances
 
 fitness :: Distances -> Solution -> Double
-fitness distances = sum . map (fitness_group distances)
+fitness distances = sum . map ((fitness_group distances) . members)
 
-fitness_group :: Distances -> Group -> Double
-fitness_group distances group =
-    diversity distances el restG + fitness_group distances restG
-    where
-        (el:rest_el) = members group
-        restG = group {members = rest_el}
+fitness_group :: Distances -> Elements -> Double
+fitness_group distances [] = 0
+fitness_group distances (el:rest_el) =
+    diversity distances el rest_el + fitness_group distances rest_el
 
 local_improvement :: Distances -> Double -> Solution -> StdGen
                         -> (Solution, StdGen)
@@ -262,8 +276,8 @@ li_move distances pls s_in (el:elems) rng
             rng
     where
         elgroup = head $ filter (elem el . members) s_in
-        fs = map (\g -> (- diversity distances el elgroup)
-                            + diversity distances el (snd $ move el elgroup g))
+        fs = map (\g -> - (diversity distances el $ members elgroup)
+                            + (diversity distances el $ members (snd $ move el elgroup g)))
                     s_in
         first_improv_index = findIndex (> 0) fs
         figroup = (s_in!!(fromJust first_improv_index))
@@ -284,10 +298,10 @@ li_swap distances s_in (group:groups) (el:elems)
     where
         fs = map (\g ->
                 map (\el2 -> let (ngroup, ng) = swap el el2 group g
-                    in  (- diversity distances el group)
-                        - diversity distances el2 g
-                        + diversity distances el ng
-                        + diversity distances el2 ngroup)
+                    in  - (diversity distances el $ members group)
+                        - (diversity distances el2 $ members g)
+                        + (diversity distances el $ members ng)
+                        + (diversity distances el2 $ members ngroup))
                     (members g))
                 groups
         first_improv_group_index = findIndex (isJust . findIndex (> 0)) fs
@@ -325,7 +339,7 @@ no1 distances s_in nd rng = (s_out, nrng)
     where
         (rn, trng) = randomR (1, nd) rng
         (groups, elems, ttrng) = no1_ distances s_in [] rn trng
-        ([], s_out, nrng) = fill distances elems groups ttrng
+        ([], s_out, nrng) = if (1 == length groups) then error "no1" else fill distances elems groups ttrng
 
 no1_ :: Distances -> Groups -> Elements -> Integer -> StdGen
             -> (Groups, Elements, StdGen)
@@ -334,7 +348,8 @@ no1_ distances s_in elems n rng =
     no1_ distances (nrgroup:restGroups) (nelem:elems) (n-1) nrng
     where
         nemptygroups = filter (\g -> not $ null $ members g) s_in
-        (rgroup, restGroups, trng) = randomElem nemptygroups rng
+        (rgroup, restG, trng) = randomElem nemptygroups rng
+        restGroups = delete rgroup s_in
         (nelem, restElems, nrng) = randomElem (members rgroup) trng
         nrgroup = rgroup {members = restElems}
         
@@ -343,7 +358,7 @@ no2 distances s_in nd rng = (s_out, nrng)
     where
         (rn, trng) = randomR (1, nd) rng
         (groups, elems) = no2_ distances s_in [] rn
-        ([], s_out, nrng) = fill distances elems groups trng
+        ([], s_out, nrng) = if (1 == length groups) then error "no2" else fill distances elems groups trng
 
 no2_ :: Distances -> Groups -> Elements -> Integer -> (Groups, Elements)
 no2_ distances groups elems 0 = (groups, elems)
@@ -364,8 +379,7 @@ least_diverse distances groups = (ngroups, nelem)
                         diversity
                             distances
                             el
-                            containing_group {members =
-                                (delete el $ members containing_group)}))
+                            (delete el $ members containing_group)))
             (least_diverse_ distances groups)
         ngroups = map
                     (\g -> if elem nelem $ members g
@@ -384,7 +398,7 @@ least_diverse__ distances group =
         (comparing (\el -> diversity
                             distances
                             el
-                            (group {members = (delete el $ members group)})))
+                            (delete el $ members group)))
         (members group)
 
 no3 :: Distances -> Solution -> Integer -> StdGen -> (Solution, StdGen)
@@ -421,5 +435,6 @@ binary_tournament distances sols rng =
         rsol2 = (delete rsol1 sols)!!rindex2
 
 best_solution_found :: Distances -> [Solution] -> Solution
+--best_solution_found distances = head
 best_solution_found distances =
        maximumBy (comparing (fitness distances))
