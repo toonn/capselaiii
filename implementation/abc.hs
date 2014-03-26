@@ -13,6 +13,8 @@ import Data.Maybe
 import Data.IORef
 import System.Timeout
 import Debug.Trace (trace)
+import System.Directory
+import Control.Monad
 
 mkset :: Ord a => a -> a -> Set.Set a
 mkset x y = Set.fromList [x, y]
@@ -35,45 +37,43 @@ main = do
                             || (isInfixOf "240" s)
                             || (isInfixOf "480" s)))
                     geo
-    map runlimitndp geoN
+    let geoM = map ((home ++ "/mdgplib/Geo/") ++) geoN
+    runlimitndp 20 0 [no1] geoM
     
 runlimitndp :: Integer -> Double
         -> [(Distances -> Solution -> Integer -> StdGen -> (Solution, StdGen))]
-        -> Integer -> String
+        -> [FilePath]
             -> IO ()
-runlimitndp np pls nos tmax_s filename
+runlimitndp _ _ _ _ | trace ("rlndp") False = undefined
+runlimitndp np pls nos (filename:fs)
     | isInfixOf "120" filename = do
-        let n = 120 in
-            sols = [(limit, ndp, runOnce limit np ndp pls nos tmax_s filename)
-                | limit <-
-                    [toInteger (0.1*n), toInteger (0.2*n)..toInteger (0.5*n)],
-                  ndp <- [toInteger (0.5*n), n, 2*n]]
-        map (\(limit, ndp, sol) -> print $ show 120 ++ "--" ++ show limit
-                        ++ "--" ++ show ndp ++ ": " ++ fitness distances sol)
-            sols
+        makeAndPrint 120
+        runlimitndp np pls nos fs
     | isInfixOf "240" filename = do
-        let n = 240 in
-            sols = [runOnce limit np ndp pls nos tmax_s filename
-                | limit <-
-                    [toInteger (0.1*n), toInteger (0.2*n)..toInteger (0.5*n)],
-                  ndp <- [toInteger (0.5*n), n, 2*n]]
-        map (\(limit, ndp, sol) -> print $ show 120 ++ "--" ++ show limit
-                        ++ "--" ++ show ndp ++ ": " ++ fitness distances sol)
-            sols
+        makeAndPrint 240
+        runlimitndp np pls nos fs
     | isInfixOf "480" filename = do
-        let n = 480 in
-            sols = [runOnce limit np ndp pls nos tmax_s filename
-                | limit <-
-                    [toInteger (0.1*n), toInteger (0.2*n)..toInteger (0.5*n)],
-                  ndp <- [toInteger (0.5*n), n, 2*n]]
-        map (\(limit, ndp, sol) -> print $ show 120 ++ "--" ++ show limit
-                        ++ "--" ++ show ndp ++ ": " ++ fitness distances sol)
-            sols
+        makeAndPrint 240
+        runlimitndp np pls nos fs
+    where
+        printem n [] = do return ()
+        printem n ((limit,ndp,sol):rest) = do
+                    theSol <- sol
+                    print $ show n ++ "--" ++ show limit
+                        ++ "--" ++ show ndp ++ ": " ++ show theSol
+                    printem n rest
+        makeAndPrint n = 
+            printem n 
+                [(limit, ndp, runOnce limit np ndp pls nos 3 filename)
+                    | limit <-
+                        [(quot n 10), (quot n 5)..(quot n 2)],
+                      ndp <- [(quot n 2), n, 2*n]]
+
 
 runOnce :: Integer -> Integer -> Integer -> Double
         -> [(Distances -> Solution -> Integer -> StdGen -> (Solution, StdGen))]
         -> Integer -> String
-            -> IO Solution
+            -> IO Double
 runOnce limit np ndp pls nos tmax_s filename = do
     file <- readFile filename
     let (header:dists) = lines file
@@ -85,9 +85,9 @@ runOnce limit np ndp pls nos tmax_s filename = do
     let distances = map_from_list dists
     let elems = nub $ concatMap (\x -> take 2 $ words x) dists
     best_solution <- abc distances elems groups limit np ndp pls nos
-                        (1000000*tmax_s)
-    print $ filename ++ ":" ++ (fitness distances $ readIORef best_solution)
-    readIORef best_solution
+                        (fromInteger (1000000*tmax_s))
+    bs <- readIORef best_solution
+    return (fitness distances bs)
 
 groups_from_limits :: [Integer] -> Groups
 groups_from_limits [] = []
@@ -318,8 +318,10 @@ li_move distances pls s_in (el:elems) rng
             distances
             pls
             (apply_transform s_in elgroup figroup $ move el elgroup figroup)
+            all_elems
             rng
     where
+        all_elems = sort $ Set.toList (Set.unions $ Map.keys distances)
         -- Groep waar el vandaan komt
         elgroup = safehead (filter (elem el . members) s_in) (show s_in)
         -- Lijst van toegevoegde fitnesses per groep als we el daar in zouden steken 
